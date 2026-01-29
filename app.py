@@ -3,72 +3,67 @@ import pandas as pd
 from sqlalchemy import create_engine
 import plotly.express as px
 
-# --- CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(page_title="ETF Alpha Terminal", layout="wide", initial_sidebar_state="collapsed")
+# --- CONFIGURACIÓN ---
+st.set_page_config(page_title="ETF Alpha Terminal", layout="wide")
 
-# CSS para el look "Dark Terminal"
 st.markdown("""
     <style>
-    .main { background-color: #0e1117; }
-    div[data-testid="stMetricValue"] { font-size: 28px; color: #00ffcc; }
-    .stDataFrame { border: 1px solid #333; border-radius: 10px; }
-    h1, h2, h3 { color: #ffffff; }
+    .main { background-color: #0e1117; color: white; }
+    div[data-testid="stMetricValue"] { color: #00ffcc; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- FUNCIÓN DE CONEXIÓN ---
+# --- MOTOR DE DATOS ---
 def get_engine():
-    # Extraemos los datos de los secrets de Streamlit
+    # Acceso a los secrets
     user = st.secrets["db_user"]
     pwd = st.secrets["db_password"]
     host = st.secrets["db_host"]
     port = st.secrets["db_port"]
     db = st.secrets["db_name"]
-    # Construcción de la URL de conexión directa
-    return create_engine(f"postgresql://{user}:{pwd}@{host}:{port}/{db}")
+    
+    # URL de conexión directa
+    db_url = f"postgresql://{user}:{pwd}@{host}:{port}/{db}"
+    
+    # (timeout) para ayudar a la red
+    return create_engine(
+        db_url, 
+        connect_args={'connect_timeout': 10}
+    )
 
 @st.cache_data(ttl=300)
 def load_data():
     engine = get_engine()
-    # tabla
-    query = "SELECT *, (day_high - day_low) as vol_calc FROM raw_etf_market_data WHERE price > 0"
-    df = pd.read_sql(query, engine)
-    return df
+    query = "SELECT *, (day_high - day_low) as vol_calc FROM raw_etf_market_data"
+    return pd.read_sql(query, engine)
 
-# --- CUERPO DEL DASHBOARD ---
+# --- DASHBOARD ---
 st.title("⚡ ETF ALPHA TERMINAL")
-st.markdown(f"**Market Status:** 🟢 Live | **Port:** 5432")
 st.write("---")
 
 try:
     df = load_data()
+    
+    # Limpieza básica
+    df['price'] = pd.to_numeric(df['price'], errors='coerce').fillna(0)
+    df = df[df['price'] > 0]
 
-    # KPIs Principales
-    k1, k2, k3 = st.columns(3)
-    with k1:
-        st.metric("Total Assets", len(df))
-    with k2:
-        st.metric("Avg Price", f"${df['price'].mean():.2f}")
-    with k3:
-        top_vol = df.nlargest(1, 'vol_calc')
-        st.metric("Top Volatility", top_vol['symbol'].values[0], f"${top_vol['vol_calc'].values[0]:.2f}")
+    # KPIs
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Activos en BD", len(df))
+    c2.metric("Precio Promedio", f"${df['price'].mean():.2f}")
+    c3.metric("Max Volatilidad", df['symbol'].iloc[df['vol_calc'].idxmax()])
 
-    # Gráficos
-    col_a, col_b = st.columns([2, 1])
-    with col_a:
-        st.subheader("Distribución de Precios")
-        fig = px.histogram(df, x="price", nbins=50, color_discrete_sequence=['#00ffcc'], template="plotly_dark")
-        st.plotly_chart(fig, use_container_width=True)
-    with col_b:
-        st.subheader("Top 10 Volátiles")
-        fig_bar = px.bar(df.nlargest(10, 'vol_calc'), x='vol_calc', y='symbol', orientation='h', template="plotly_dark")
-        st.plotly_chart(fig_bar, use_container_width=True)
+    # Gráfico de barras
+    st.subheader("Top 15 ETFs por Precio")
+    fig = px.bar(df.nlargest(15, 'price'), x='symbol', y='price', template='plotly_dark', color='price')
+    st.plotly_chart(fig, use_container_width=True)
 
-    # Explorador de Datos
-    st.subheader("Market Explorer")
-    st.dataframe(df.sort_values('price', ascending=False), use_container_width=True)
+    # Explorador
+    st.subheader("Explorador de Datos (Supabase Live)")
+    st.dataframe(df, use_container_width=True)
 
 except Exception as e:
-    st.error("⚠️ Error de conexión detectado:")
+    st.error("🚨 Falló la conexión con la base de datos.")
     st.code(str(e))
-    st.info("Revisá que los Secrets en Streamlit coincidan exactamente con los de Supabase.")
+    st.info("Si el error persiste, es probable que Streamlit Cloud no soporte la conexión IPv6 de Supabase Free.")
