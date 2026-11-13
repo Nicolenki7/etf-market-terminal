@@ -1,14 +1,25 @@
-import streamlit as st
+"""Alpha Terminal — panel de ETFs sobre precios versionados.
+
+Antes leía de Supabase con `st.secrets`; esa credencial ya no existe y el panel
+quedaba inservible. Ahora lee data/etf_monthly.csv, que se versiona en el repo y
+lo regenera src/fetch_data.py desde el endpoint público de Yahoo.
+
+Todas las métricas se calculan con los cierres: no hay TER, ni Sharpe simulado,
+ni benchmark inventado. Si un dato no está en la fuente, no se muestra.
+
+Uso: streamlit run app.py
+"""
+import pathlib
+
+import numpy as np
 import pandas as pd
-import requests
 import plotly.express as px
 import plotly.graph_objects as go
-import numpy as np
-from datetime import datetime, timedelta
+import streamlit as st
 
-# --- 1. SETTINGS & INSTITUTIONAL THEME ---
+DATOS = pathlib.Path(__file__).resolve().parent / "data" / "etf_monthly.csv"
+
 st.set_page_config(page_title="Alpha Terminal | ETF Intelligence", layout="wide", page_icon="🏛️")
-
 st.markdown("""
     <style>
     .stApp { background-color: #0d1117; color: #c9d1d9; }
@@ -17,151 +28,105 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. ADVANCED DATA ENGINE (Calculations for Finance) ---
-@st.cache_data(ttl=60)
-def load_and_engineer_data():
-    url = f"{st.secrets['supabase_url']}/rest/v1/raw_etf_market_data?select=*"
-    headers = {"apikey": st.secrets["supabase_key"], "Authorization": f"Bearer {st.secrets['supabase_key']}"}
-    
-    try:
-        response = requests.get(url, headers=headers)
-        df = pd.DataFrame(response.json())
-        
-        # Conversión y limpieza
-        for col in ['price', 'day_high', 'day_low', 'day_open', 'prev_close', 'change_pct']:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-        
-        df['ingested_at'] = pd.to_datetime(df['ingested_at'])
-        df = df.sort_values(['symbol', 'ingested_at'])
 
-        # --- FINANCIAL METRICS CALCULATION ---
-        # 1. RSI (Relative Strength Index)
-        def calc_rsi(series, periods=14):
-            delta = series.diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=periods).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=periods).mean()
-            rs = gain / loss
-            return 100 - (100 / (1 + rs))
+@st.cache_data
+def cargar():
+    """Lee el CSV versionado y agrega las métricas que se derivan de él."""
+    df = pd.read_csv(DATOS).sort_values(["ticker", "fecha"])
+    df["ret"] = df.groupby("ticker")["close"].pct_change()
+    df["pico"] = df.groupby("ticker")["close"].transform("cummax")
+    df["drawdown"] = (df["close"] / df["pico"] - 1) * 100
+    return df
 
-        df['RSI'] = df.groupby('symbol')['price'].transform(lambda x: calc_rsi(x))
-        
-        # 2. Drawdown Máximo (Desde el pico más reciente)
-        df['rolling_max'] = df.groupby('symbol')['price'].transform(lambda x: x.cummax())
-        df['drawdown'] = ((df['price'] - df['rolling_max']) / df['rolling_max']) * 100
 
-        # Simulación de Datos Corporativos (Si no están en DB)
-        np.random.seed(42)
-        df['TER'] = 0.15 + (np.random.rand(len(df)) * 0.5) # Total Expense Ratio
-        df['Sharpe'] = 1.2 + (np.random.rand(len(df)) * 2.1)
-        
-        return df
-    except Exception as e:
-        st.error(f"Data Pipeline Error: {e}")
-        return pd.DataFrame()
+def rsi(serie, periodos=14):
+    """RSI clásico de Wilder sobre la serie de cierres disponibles."""
+    delta = serie.diff()
+    sube = delta.where(delta > 0, 0).rolling(periodos).mean()
+    baja = -delta.where(delta < 0, 0).rolling(periodos).mean()
+    rs = sube / baja.replace(0, np.nan)
+    return 100 - 100 / (1 + rs)
 
-df = load_and_engineer_data()
 
-# --- 3. SIDEBAR NAVIGATION ---
+df = cargar()
+
+if df.empty:
+    st.error(f"No encuentro {DATOS}. Ejecuta `python src/fetch_data.py` para regenerarlo.")
+    st.stop()
+
 st.sidebar.title("🏛️ ALPHA TERMINAL")
-if not df.empty:
-    assets = sorted(df['symbol'].unique())
-    selected_asset = st.sidebar.selectbox("🎯 Target Analysis:", assets)
-    timeframe = st.sidebar.radio("⏰ Timeframe:", ["1D", "1W", "1M"], horizontal=True)
-    
-    st.sidebar.markdown("---")
-    st.sidebar.write("### 🚨 Institutional Alerts")
-    if df[df['symbol'] == selected_asset]['RSI'].iloc[-1] > 70:
-        st.sidebar.warning(f"OVERBOUGHT: {selected_asset} RSI > 70")
-    elif df[df['symbol'] == selected_asset]['RSI'].iloc[-1] < 30:
-        st.sidebar.success(f"OVERSOLD: {selected_asset} RSI < 30")
+activo = st.sidebar.selectbox("🎯 Target Analysis:", sorted(df["ticker"].unique()))
+ventana = st.sidebar.radio("⏰ Ventana:", ["12m", "24m", "todo"], horizontal=True)
+meses = {"12m": 12, "24m": 24, "todo": 10_000}[ventana]
 
-# --- 4. DEFILLAMA HEADER & MAIN PERFORMANCE ---
-if not df.empty:
-    asset_df = df[df['symbol'] == selected_asset].tail(50) # Últimos datos para visualización
-    latest = asset_df.iloc[-1]
+g = df[df.ticker == activo].tail(meses + 1).copy()
+g["rsi"] = rsi(g["close"])
 
-    # KPIs Superiores (Contexto DeFiLlama)
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Market Price", f"${latest['price']:.2f}", f"{latest['change_pct']:.2f}%")
-    k2.metric("Max Drawdown (24h)", f"{latest['drawdown']:.2f}%", delta_color="inverse")
-    k3.metric("RSI (14)", f"{latest['RSI']:.1f}")
-    k4.metric("Sharpe Ratio", f"{latest['Sharpe']:.2f}")
+ultimo = g.iloc[-1]
+ret_acum = (ultimo["close"] / g["close"].iloc[0] - 1) * 100
+vol = float(g["ret"].std() * np.sqrt(12) * 100)
 
-    st.markdown("---")
+st.sidebar.markdown("---")
+st.sidebar.write("### 🚨 Señales (RSI 14)")
+if pd.notna(ultimo["rsi"]):
+    if ultimo["rsi"] > 70:
+        st.sidebar.warning(f"SOBRECOMPRA: {activo} RSI {ultimo['rsi']:.0f}")
+    elif ultimo["rsi"] < 30:
+        st.sidebar.success(f"SOBREVENTA: {activo} RSI {ultimo['rsi']:.0f}")
+    else:
+        st.sidebar.info(f"Zona neutra: RSI {ultimo['rsi']:.0f}")
+else:
+    st.sidebar.info("Sin historia suficiente para el RSI en esta ventana.")
 
-    # GRID DE GRÁFICOS (DEFILLAMA STYLE)
-    c1, c2 = st.columns([2, 1])
+st.title(f"{activo} · cierre {ultimo['fecha']}")
+k1, k2, k3, k4 = st.columns(4)
+k1.metric("Último cierre", f"${ultimo['close']:.2f}", f"{ultimo['ret']*100:+.2f}% mes")
+k2.metric("Retorno en ventana", f"{ret_acum:+.1f}%", f"{meses if meses < 10_000 else 'toda la serie'} meses")
+k3.metric("Drawdown actual", f"{ultimo['drawdown']:.1f}%", delta_color="inverse")
+k4.metric("Volatilidad anual", f"{vol:.1f}%")
 
-    with c1:
-        # 1. Candlestick Chart (OHLCV)
-        st.subheader("🕯️ Candlestick & Volume Patterns")
-        fig_candle = go.Figure(data=[go.Candlestick(
-            x=asset_df['ingested_at'], open=asset_df['day_open'],
-            high=asset_df['day_high'], low=asset_df['day_low'], close=asset_df['price'],
-            name="OHLC"
-        )])
-        # 2. Volume Overlay
-        fig_candle.add_trace(go.Bar(x=asset_df['ingested_at'], y=asset_df['price']*0.1, name="Volume", opacity=0.3, yaxis="y2"))
-        
-        fig_candle.update_layout(
-            template="plotly_dark", height=450, xaxis_rangeslider_visible=False,
-            margin=dict(l=0, r=0, t=0, b=0),
-            yaxis2=dict(title="Volume", overlaying="y", side="right", showgrid=False)
-        )
-        st.plotly_chart(fig_candle, use_container_width=True)
+c1, c2 = st.columns([2, 1])
+with c1:
+    st.subheader("🕯️ Precio de cierre y drawdown")
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=g["fecha"], y=g["close"], name="Cierre", line=dict(color="#58a6ff")))
+    fig.add_trace(go.Scatter(x=g["fecha"], y=g["drawdown"], name="Drawdown %",
+                             line=dict(color="#f85149"), yaxis="y2"))
+    fig.update_layout(template="plotly_dark", height=420, xaxis_rangeslider_visible=False,
+                      yaxis2=dict(title="Drawdown %", overlaying="y", side="right", showgrid=False),
+                      margin=dict(l=0, r=0, t=0, b=0))
+    st.plotly_chart(fig, use_container_width=True)
 
-    with c2:
-        # 3. Market Sentiment (Interactive Donut)
-        st.subheader("🧠 Sentiment Analysis")
-        bulls = len(df[df['change_pct'] > 0])
-        bears = len(df[df['change_pct'] <= 0])
-        fig_sent = go.Figure(data=[go.Pie(labels=['Bullish', 'Bearish'], values=[bulls, bears], hole=.7, marker_colors=['#3fb950', '#f85149'])])
-        fig_sent.update_layout(template="plotly_dark", height=250, showlegend=False, margin=dict(l=0,r=0,t=0,b=0),
-                              annotations=[dict(text=f"{len(df)} Assets", showarrow=False, font_size=16)])
-        st.plotly_chart(fig_sent, use_container_width=True)
-        
-        # 4. TER vs Sharpe Ratio (Competitive Positioning)
-        st.subheader("🎯 Risk/Reward Alpha")
-        fig_risk = px.scatter(df.groupby('symbol').last().reset_index(), x='TER', y='Sharpe', color='change_pct', 
-                             size='price', hover_name='symbol', template="plotly_dark",
-                             color_continuous_scale="RdYlGn")
-        fig_risk.update_layout(height=250, margin=dict(l=0,r=0,t=0,b=0))
-        st.plotly_chart(fig_risk, use_container_width=True)
+with c2:
+    st.subheader("🧠 Cierres al alza")
+    ultimos = df.groupby("ticker").last()
+    alza = int((ultimos["ret"] > 0).sum())
+    fig_s = go.Figure(data=[go.Pie(labels=["Al alza", "A la baja"], values=[alza, len(ultimos) - alza],
+                                   hole=.7, marker_colors=["#3fb950", "#f85149"])])
+    fig_s.update_layout(template="plotly_dark", height=230, showlegend=False,
+                        margin=dict(l=0, r=0, t=0, b=0),
+                        annotations=[dict(text=f"{len(ultimos)} ETFs", showarrow=False, font_size=14)])
+    st.plotly_chart(fig_s, use_container_width=True)
 
-    # --- 5. STRATEGY DEVELOPMENT (ADVANCED ROW) ---
-    st.markdown("### 🏛️ Strategy Development: Technical Overlays")
-    s1, s2 = st.columns(2)
+st.subheader("📊 Retorno por año")
+anual = df.copy()
+anual["anio"] = anual["fecha"].str[:4]
+anual = anual.dropna(subset=["ret"]).groupby(["ticker", "anio"])["ret"].apply(lambda s: ((1 + s).prod() - 1) * 100)
+tabla_anual = anual.unstack("anio").round(1)
+st.dataframe(tabla_anual, use_container_width=True)
 
-    with s1:
-        # 5. Price vs Benchmark (Alpha Tracking)
-        st.write("**Alpha Tracking (vs S&P 500 Proxy)**")
-        # Simula benchmark: S&P500 rinde +0.01% cada paso
-        benchmark = [asset_df['price'].iloc[0] * (1.0001**i) for i in range(len(asset_df))]
-        fig_bench = go.Figure()
-        fig_bench.add_trace(go.Scatter(x=asset_df['ingested_at'], y=asset_df['price'], name=selected_asset, line=dict(color='#58a6ff')))
-        fig_bench.add_trace(go.Scatter(x=asset_df['ingested_at'], y=benchmark, name="S&P 500 Proxy", line=dict(dash='dash', color='#8b949e')))
-        fig_bench.update_layout(template="plotly_dark", height=300, margin=dict(l=0,r=0,t=0,b=0))
-        st.plotly_chart(fig_bench, use_container_width=True)
+st.subheader("🔗 Correlación de retornos mensuales")
+piv = df.pivot_table(index="fecha", columns="ticker", values="ret")
+fig_corr = px.imshow(piv.corr(), text_auto=".2f", color_continuous_scale="RdBu_r", aspect="auto")
+fig_corr.update_layout(height=380, template="plotly_dark", margin=dict(l=0, r=0, t=0, b=0))
+st.plotly_chart(fig_corr, use_container_width=True)
 
-    with s2:
-        # 6. Correlation Matrix (Peer Analysis)
-        st.write("**Asset Correlation Matrix (Peer-to-Peer)**")
-        corr_data = df.pivot_table(index='ingested_at', columns='symbol', values='price').corr()
-        fig_corr = px.imshow(corr_data, text_auto=".2f", color_continuous_scale='RdBu_r', aspect="auto")
-        fig_corr.update_layout(height=300, margin=dict(l=0,r=0,t=0,b=0))
-        st.plotly_chart(fig_corr, use_container_width=True)
-
-    # --- 6. COMPETITIVE INTELLIGENCE DATA LEDGER ---
-    st.markdown("---")
-    st.subheader("📂 Real-Time Competitive Ledger")
-    # Presentación limpia de la tabla para análisis de negocio
-    st.dataframe(
-        df.groupby('symbol').last().sort_values('Sharpe', ascending=False),
-        column_config={
-            "price": st.column_config.NumberColumn("Last Price", format="$%.2f"),
-            "TER": st.column_config.NumberColumn("TER (%)", format="%.2f%%"),
-            "RSI": st.column_config.ProgressColumn("RSI Momentum", min_value=0, max_value=100, format="%.0f"),
-            "Sharpe": st.column_config.NumberColumn("Sharpe Ratio", format="%.2f")
-        },
-        use_container_width=True
-    )
+st.subheader("📂 Ledger competitivo")
+ledger = df.groupby("ticker").agg(
+    ultimo_cierre=("close", "last"),
+    retorno_acum=("close", lambda s: (s.iloc[-1] / s.iloc[0] - 1) * 100),
+    drawdown_max=("drawdown", "min"),
+    volatilidad=("ret", lambda s: s.std() * np.sqrt(12) * 100),
+).round(2).sort_values("retorno_acum", ascending=False)
+st.dataframe(ledger, use_container_width=True)
+st.caption("Fuente: data/etf_monthly.csv · cierres mensuales, sin dividendos. Sin Supabase y sin métricas simuladas.")
