@@ -1,6 +1,6 @@
-# 🏛️ Alpha Terminal — Institutional ETF Analytics Platform
+# 🏛️ Alpha Terminal — ETF Analytics Platform
 
-**Real-Time Market Intelligence | Technical Analysis | Peer Correlation | Risk Metrics**
+**Monthly closes in, real indicators out: RSI, drawdown, volatility, peer correlation**
 
 [![Streamlit](https://img.shields.io/badge/Streamlit-FF4B4B?logo=streamlit)](https://streamlit.io/)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
@@ -9,20 +9,17 @@
 
 ---
 
-## 📋 Overview
+## 📊 Interactive report
 
-Institutional-grade ETF analytics dashboard providing real-time market intelligence with advanced financial metrics, technical indicators, and peer correlation analysis. Built for portfolio managers and analysts who need actionable insights for allocation decisions.
-
-Transforms raw market data into professional-grade analytics including RSI, Sharpe Ratio, Max Drawdown, and benchmark alpha tracking.
+**[Open the interactive report →](https://nicolenki7.github.io/etf-market-terminal/report.html)** — accumulated return, max drawdown, annualised volatility and Sharpe per ETF, rebuilt from `data/etf_monthly.csv`.
 
 ---
 
-## 💼 Business Impact
+## 📋 Overview
 
-- **Overbought/Oversold Detection**: RSI analysis identifies potential reversal points
-- **Risk-Adjusted Returns**: Sharpe Ratio and Drawdown metrics for portfolio optimization
-- **Peer Analysis**: Correlation matrices reveal asset relationships and diversification opportunities
-- **Benchmark Tracking**: Alpha measurement vs S&P 500 for performance attribution
+A Streamlit terminal that reads **committed monthly closes** and computes technical and risk indicators from them. No database, no API key, no credentials: the data is a versioned CSV, so a clone reproduces every number the app shows.
+
+Five ETFs — SPY, QQQ, IVV, IEMG, GLD — over **185 monthly rows, 2023-12 → 2026-11**.
 
 ---
 
@@ -33,66 +30,36 @@ Transforms raw market data into professional-grade analytics including RSI, Shar
 | **Frontend** | Streamlit (Python) |
 | **Visualization** | Plotly Express, Plotly Graph Objects |
 | **Data Processing** | Pandas, NumPy |
-| **Data Source** | Supabase (REST API) |
-| **Authentication** | Streamlit Secrets Management |
-| **Deployment** | Streamlit Cloud / Docker |
+| **Data Source** | `data/etf_monthly.csv`, refreshed from the public Yahoo Finance chart endpoint |
+| **Credentials** | None required |
 
 ---
 
 ## 🏗️ Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     Alpha Terminal                          │
-├─────────────────────────────────────────────────────────────┤
-│  Frontend: Streamlit (Interactive Dashboard)                │
-│  Visualization: Plotly (Dark Theme, Institutional UI)       │
-├─────────────────────────────────────────────────────────────┤
-│  Data Engine: Python + Pandas                               │
-│  - RSI Calculation (14-period rolling window)               │
-│  - Drawdown Analysis (cumulative max tracking)              │
-│  - Sharpe Ratio Simulation                                  │
-├─────────────────────────────────────────────────────────────┤
-│  Data Source: Supabase (Real-time REST API)                 │
-│  - raw_etf_market_data table                                │
-│  - Fields: price, day_high, day_low, day_open, prev_close   │
-└─────────────────────────────────────────────────────────────┘
+Yahoo chart endpoint (public, no key)
+        │  src/fetch_data.py  — deduplicates the current month
+        ▼
+ data/etf_monthly.csv   (185 rows: date, symbol, close)
+        │
+        ├── app.py              Streamlit terminal: RSI, drawdown, volatility, correlation
+        └── src/build_report.py → docs/report.html  (standalone, filterable)
 ```
 
 ---
 
 ## 🚀 Key Features
 
-### Real-Time Market Metrics
-| Metric | Description | Business Value |
-| :--- | :--- | :--- |
-| **RSI (14-period)** | Relative Strength Index | Identifies overbought (>70) / oversold (<30) conditions |
-| **Max Drawdown** | Peak-to-trough decline % | Risk assessment and capital preservation |
-| **Sharpe Ratio** | Risk-adjusted return metric | Portfolio optimization and alpha generation |
-| **Alpha Tracking** | Performance vs S&P 500 | Benchmark-relative performance measurement |
-
-### Advanced Visualizations
-- **Candlestick OHLCV Charts**: Price action with volume overlay
-- **Sentiment Analysis Donut**: Bullish vs Bearish asset distribution
-- **Risk/Reward Scatter**: TER vs Sharpe Ratio positioning
-- **Correlation Matrix**: Peer-to-peer asset correlation heatmap
-- **Benchmark Comparison**: Alpha tracking with interactive overlays
-
-### Institutional Alerts
-Automatic notifications for:
-- RSI > 70 (Overbought — potential reversal)
-- RSI < 30 (Oversold — potential buying opportunity)
-
----
-
-## 📊 Results & Metrics
-
-| Feature | Implementation |
+| Metric | How it is computed |
 | :--- | :--- |
-| **RSI Calculation** | 14-period rolling window |
-| **Drawdown Tracking** | Cumulative max with real-time updates |
-| **Correlation Analysis** | Pairwise Pearson correlation matrix |
-| **UI Theme** | GitHub Dark Dimmed (professional) |
+| **RSI (14-period)** | Rolling window over the monthly closes |
+| **Max Drawdown** | Peak-to-trough decline on the close series |
+| **Volatility** | Annualised standard deviation of monthly returns |
+| **Peer Correlation** | Pairwise Pearson correlation of monthly returns |
+| **Charting** | Line and OHLC views from the committed closes |
+
+Everything above is arithmetic on the CSV. There is **no simulated figure** anywhere in the app: when a metric needs a field the source does not provide (expense ratios, for instance), it is omitted rather than invented.
 
 ---
 
@@ -100,11 +67,14 @@ Automatic notifications for:
 
 ```
 etf-market-terminal/
-├── app.py                      # Main Streamlit application
-├── requirements.txt            # Python dependencies
-├── .streamlit/
-│   └── secrets.toml.example   # Configuration template
-└── README.md                   # Project documentation
+├── app.py                  # Streamlit terminal
+├── data/etf_monthly.csv    # 185 monthly closes, 5 ETFs
+├── src/
+│   ├── fetch_data.py       # refresh the CSV from the Yahoo chart endpoint
+│   ├── build_report.py     # build docs/report.html from the CSV
+│   └── report.py           # shared report generator (CSS + JS + helpers)
+├── docs/report.html        # published report (GitHub Pages)
+└── requirements.txt
 ```
 
 ---
@@ -112,116 +82,68 @@ etf-market-terminal/
 ## 🔧 Setup & Installation
 
 ```bash
-# Clone the repository
 git clone https://github.com/Nicolenki7/etf-market-terminal.git
 cd etf-market-terminal
 
-# Install dependencies
+python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-# Configure Supabase credentials
-mkdir -p .streamlit
-cp secrets.toml.example .streamlit/secrets.toml
-# Edit .streamlit/secrets.toml with your Supabase credentials
-
-# Run the application
-streamlit run app.py
+streamlit run app.py            # the terminal
+python src/fetch_data.py        # optional: refresh data/etf_monthly.csv
+python src/build_report.py      # optional: rebuild docs/report.html
 ```
 
-### Configuration
-
-Create `.streamlit/secrets.toml`:
-```toml
-[supabase]
-supabase_url = "https://your-project.supabase.co"
-supabase_key = "your-anon-or-service-role-key"
-```
+No `.streamlit/secrets.toml` is needed. If the CSV is missing, the app says so and prints the command to regenerate it instead of showing empty charts.
 
 ---
 
 ## 📈 Usage
 
-### 1. Select ETF
-Choose from available ETF symbols (SPY, QQQ, IWM, etc.)
-
-### 2. View Metrics Dashboard
-- **Price Charts**: OHLCV candlestick with volume
-- **Technical Indicators**: RSI, moving averages
-- **Risk Metrics**: Drawdown, Sharpe Ratio
-- **Peer Comparison**: Correlation with other ETFs
-
-### 3. Analyze Alerts
-Monitor overbought/oversold conditions for trading opportunities
-
----
-
-## 🎯 Key Learnings
-
-- **Institutional UI matters**: Dark theme reduces eye strain for professional use
-- **Real-time calculations**: RSI and drawdown require efficient rolling window operations
-- **Correlation insights**: Peer analysis reveals hidden portfolio risks
-- **Alert thresholds**: RSI 70/30 levels provide actionable signals
+1. Pick an ETF in the sidebar.
+2. Read its price series, RSI and drawdown.
+3. Compare it against its peers with the correlation matrix.
 
 ---
 
 ## 📝 Data Schema
 
-### `raw_etf_market_data` Table
+`data/etf_monthly.csv`:
 
 | Column | Type | Description |
 | :--- | :--- | :--- |
-| `symbol` | TEXT | ETF ticker symbol (e.g., SPY, QQQ) |
-| `price` | FLOAT | Current market price |
-| `day_high` | FLOAT | Daily high |
-| `day_low` | FLOAT | Daily low |
-| `day_open` | FLOAT | Daily open price |
-| `prev_close` | FLOAT | Previous close |
-| `change_pct` | FLOAT | Percentage change |
-| `ingested_at` | TIMESTAMP | Data ingestion timestamp |
+| `date` | TEXT | Month, `YYYY-MM` |
+| `symbol` | TEXT | ETF ticker (SPY, QQQ, IVV, IEMG, GLD) |
+| `close` | FLOAT | Month-end close in USD |
 
 ---
 
-## 🔮 Future Enhancements
+## 🚧 Limitations
 
-- [ ] Real-time WebSocket data streaming
-- [ ] Portfolio backtesting engine
-- [ ] Alert system (email/Slack notifications)
-- [ ] Multi-timeframe analysis (1D, 1W, 1M, 1Y)
-- [ ] Factor analysis (Value, Growth, Momentum, Quality)
-- [ ] Export to Excel/PDF reports
-
----
-
-## 🔗 Links
-
-| Resource | URL |
-| :--- | :--- |
-| **Repository** | https://github.com/Nicolenki7/etf-market-terminal |
-| **Live Demo** | (Deploy on Streamlit Cloud) |
+- **Monthly granularity.** Weekly or intraday signals cannot be built from this file.
+- **Closes only.** No volume, no intra-month high/low, so no true candlestick reconstruction.
+- **No expense ratios** in the source, so TER-based comparison is absent on purpose.
+- Five tickers is a fixed universe, not the ETF market.
+- The current month is incomplete until it closes; `fetch_data.py` deduplicates it so the series does not bend.
 
 ---
 
 ## 📝 Resumen en Español
 
-**Alpha Terminal** es una plataforma de análisis institucional de ETFs que proporciona métricas financieras avanzadas en tiempo real. Incluye cálculo de RSI (14 períodos), Drawdown máximo, Ratio Sharpe, y análisis de correlación entre activos. El dashboard está construido con Streamlit y Plotly, con un tema oscuro profesional. Ideal para gestores de portafolio y analistas que necesitan visibilidad inmediata sobre condiciones de sobrecompra/sobreventa, rendimiento ajustado al riesgo, y posicionamiento relativo vs benchmark.
+Terminal de ETFs en Streamlit que lee **cierres mensuales versionados** (`data/etf_monthly.csv`, 185 filas, 5 ETFs, 2023-12 a 2026-11) descargados del endpoint público de Yahoo. Calcula RSI, drawdown, volatilidad anualizada y correlación entre pares con aritmética sobre el CSV: sin base de datos, sin claves y sin métricas simuladas. El informe interactivo se regenera con `src/build_report.py` a partir del mismo archivo.
 
 ---
 
 ## 📄 License
 
-MIT License — Feel free to fork, modify, and use for personal or commercial projects.
+MIT License — feel free to fork, modify, and use for personal or commercial projects.
 
 ---
 
 ## 👤 Author
 
-**Nicolás Zalazar** | Senior Data Engineer & Microsoft Fabric Specialist
+**Nicolás Zalazar** | Data Analyst · Aspiring Data Engineer · Mallorca, Spain
 
 - GitHub: [@Nicolenki7](https://github.com/Nicolenki7)
 - LinkedIn: [nicolas-zalazar-63340923a](https://www.linkedin.com/in/nicolas-zalazar-63340923a)
 - Portfolio: [nicolenki7.github.io/Portfolio](https://nicolenki7.github.io/Portfolio/)
 - Email: zalazarn046@gmail.com
-
----
-
-*Last Updated: March 2026*
